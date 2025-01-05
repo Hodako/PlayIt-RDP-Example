@@ -1,47 +1,46 @@
-name: Linux RDP Tunnel using Ngrok
+name: Kali Linux Desktop via Web Browser with noVNC
 
 on:
   workflow_dispatch:
 
 jobs:
-  setup-rdp-tunnel:
+  setup-kali-web:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Update and Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y xfce4 xfce4-goodies xrdp wget unzip
-        sudo systemctl enable xrdp
-        sudo systemctl start xrdp
+      # Step 1: Set up Kali Linux environment
+      - name: Install Kali Linux
+        run: |
+          sudo apt update
+          sudo apt install -y debootstrap
+          mkdir kali-linux
+          sudo debootstrap --arch amd64 kali-rolling kali-linux/ http://http.kali.org/kali
+          echo "nameserver 8.8.8.8" | sudo tee kali-linux/etc/resolv.conf
 
-    - name: Configure RDP User
-      run: |
-        sudo adduser rdpuser --gecos "RDP User,,," --disabled-password
-        echo "rdpuser:rdp123" | sudo chpasswd
-        sudo adduser rdpuser sudo
+      # Step 2: Install Desktop Environment and noVNC
+      - name: Configure Kali Linux
+        run: |
+          sudo chroot kali-linux /bin/bash -c "apt update && apt install -y xfce4 xfce4-goodies tigervnc-standalone-server websockify"
+          sudo chroot kali-linux /bin/bash -c "useradd -m -s /bin/bash kali"
+          sudo chroot kali-linux /bin/bash -c "echo 'kali:kali123' | chpasswd"
 
-    - name: Download and Install Ngrok
-      run: |
-        wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -O ngrok.tgz
-        tar -xvzf ngrok.tgz
-        sudo mv ngrok /usr/local/bin
+      # Step 3: Start noVNC Server
+      - name: Start noVNC Server
+        run: |
+          sudo chroot kali-linux /bin/bash -c "tigervncserver -geometry 1280x720 -localhost no :1"
+          nohup sudo chroot kali-linux /bin/bash -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &
 
-    - name: Authenticate Ngrok
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-      run: |
-        ngrok config add-authtoken $NGROK_AUTH_TOKEN
+      # Step 4: Install and Start Ngrok
+      - name: Install and Configure Ngrok
+        run: |
+          wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
+          tar -xvzf ngrok-v3-stable-linux-amd64.tgz
+          sudo mv ngrok /usr/local/bin
+          ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+          ngrok http 6080 &
 
-    - name: Start Ngrok Tunnel for RDP
-      run: |
-        nohup ngrok tcp 3389 --log=stdout > ngrok.log 2>&1 &
-
-    - name: Display Ngrok Tunnel Info
-      run: |
-        sleep 5  # Wait for Ngrok to start
-        curl --silent http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url'
-
-    - name: Keep the Workflow Alive
-      run: |
-        sleep 43200  # Keep the workflow running for 12 hours
+      # Step 5: Fetch Public URL for Web Browser
+      - name: Fetch Ngrok URL
+        run: |
+          sleep 10 # Allow Ngrok to initialize
+          curl -s localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url'
