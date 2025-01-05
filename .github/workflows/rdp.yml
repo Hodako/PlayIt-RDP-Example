@@ -1,10 +1,10 @@
-name: Kali Linux Desktop via Web Browser with noVNC
+name: Kali Linux VNC with NoVNC and Ngrok
 
 on:
   workflow_dispatch:
 
 jobs:
-  setup-kali-web:
+  setup-kali-vnc:
     runs-on: ubuntu-latest
 
     steps:
@@ -17,20 +17,30 @@ jobs:
           sudo debootstrap --arch amd64 kali-rolling kali-linux/ http://http.kali.org/kali
           echo "nameserver 8.8.8.8" | sudo tee kali-linux/etc/resolv.conf
 
-      # Step 2: Install Desktop Environment and noVNC
+      # Step 2: Install VNC Server and XFCE in Kali
       - name: Configure Kali Linux
         run: |
-          sudo chroot kali-linux /bin/bash -c "apt update && apt install -y xfce4 xfce4-goodies tigervnc-standalone-server websockify"
+          sudo chroot kali-linux /bin/bash -c "apt update && apt install -y xfce4 xfce4-goodies tightvncserver dbus-x11"
           sudo chroot kali-linux /bin/bash -c "useradd -m -s /bin/bash kali"
           sudo chroot kali-linux /bin/bash -c "echo 'kali:kali123' | chpasswd"
+          sudo chroot kali-linux /bin/bash -c "vncserver :1 -geometry 1280x1024 -depth 24"
+          sudo chroot kali-linux /bin/bash -c "echo 'kali123' > ~/.vnc/passwd"
+          sudo chroot kali-linux /bin/bash -c "chmod 600 ~/.vnc/passwd"
 
-      # Step 3: Start noVNC Server
-      - name: Start noVNC Server
+      # Step 3: Install NoVNC and WebSockets proxy
+      - name: Install NoVNC
         run: |
-          sudo chroot kali-linux /bin/bash -c "tigervncserver -geometry 1280x720 -localhost no :1"
-          nohup sudo chroot kali-linux /bin/bash -c "websockify --web=/usr/share/novnc 6080 localhost:5901" &
+          sudo apt install -y git python3-pip
+          git clone https://github.com/novnc/noVNC.git /opt/noVNC
+          sudo pip3 install websockify
 
-      # Step 4: Install and Start Ngrok
+      # Step 4: Start VNC server and NoVNC WebSockets Proxy in the background
+      - name: Start VNC Server and NoVNC Proxy
+        run: |
+          sudo chroot kali-linux /bin/bash -c "vncserver :1 -geometry 1280x1024 -depth 24"
+          sudo /opt/noVNC/utils/novnc_proxy --vnc localhost:5901 &
+
+      # Step 5: Install and Configure Ngrok
       - name: Install and Configure Ngrok
         run: |
           wget https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz
@@ -39,8 +49,10 @@ jobs:
           ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
           ngrok http 6080 &
 
-      # Step 5: Fetch Public URL for Web Browser
-      - name: Fetch Ngrok URL
+      # Step 6: Fetch Ngrok Public URL and keep it running for 12 hours
+      - name: Fetch Ngrok URL and keep it alive
         run: |
           sleep 10 # Allow Ngrok to initialize
           curl -s localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url'
+          # Keep the process running for 12 hours (43200 seconds)
+          sleep 43200 # Sleep for 12 hours
